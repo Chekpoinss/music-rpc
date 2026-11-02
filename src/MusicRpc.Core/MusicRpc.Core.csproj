@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="..\..\Media.cs" Link="Media.cs" />
+    <Compile Include="..\..\Settings.cs" Link="Settings.cs" />
+    <Compile Include="..\..\Catalog.cs" Link="Catalog.cs" />
+    <Compile Include="..\..\DiscordRpc.cs" Link="DiscordRpc.cs" />
+  </ItemGroup>
+</Project>

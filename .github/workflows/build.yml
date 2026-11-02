@@ -1,0 +1,48 @@
+name: Build and test
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '10.0.x'
+      - run: dotnet run --project tests/MusicRpc.Tests.csproj -c Release
+      - run: dotnet run --project tests/Portable/MusicRpc.Portable.Tests.csproj -c Release
+      - shell: pwsh
+        run: ./build.ps1
+      - uses: actions/upload-artifact@v7
+        with:
+          name: music-rpc-windows-x64
+          path: |
+            dist/MusicRpc.exe
+            dist/README.md
+            dist/LICENSE
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '10.0.x'
+      - run: dotnet run --project tests/Portable/MusicRpc.Portable.Tests.csproj -c Release
+      - run: dotnet publish src/MusicRpc.Linux/MusicRpc.Linux.csproj -c Release -r linux-x64 --self-contained true -p:PublishSingleFile=true -p:DebugType=None -o dist/linux
+      - run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y playerctl python3-dbus python3-gi dbus-x11
+          dbus-run-session -- python3 tests/Portable/mpris_smoke.py ./dist/linux/music-rpc
+      - uses: actions/upload-artifact@v7
+        with:
+          name: music-rpc-linux-x64
+          path: |
+            dist/linux/music-rpc
+            README.md
