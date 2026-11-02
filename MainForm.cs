@@ -9,7 +9,7 @@ public sealed class MainForm : Form
     private readonly IMediaReader reader = new MediaReader();
     private readonly TrackSelector selector = new();
     private readonly Catalog catalog = new();
-    private readonly TelegramTimeline telegramTimeline = new();
+    private readonly ApproximatePlaybackClock telegramClock = new();
     private Task<CatalogMatch?>? coverTask;
     private string? coverKey;
     private CatalogMatch? latestCover;
@@ -140,6 +140,7 @@ public sealed class MainForm : Form
         {
             var tracks = await reader.ReadAsync();
             if (exiting) return;
+            telegramClock.Observe(tracks, DateTimeOffset.UtcNow);
             sessions.Text = tracks.Count == 0
                 ? "Пока нет медиасессий. Включи музыку в AyuGram или Apple Music.\r\nЕсли AyuGram не появляется, проверь настройку системных медиаклавиш в нём."
                 : string.Join("\r\n\r\n", tracks.Select(t => $"{t.Source} — {(t.Playing ? "▶ играет" : "пауза / остановлено")}\r\n{t.Artist} — {t.Title}\r\nID: {t.AppId}"));
@@ -158,10 +159,10 @@ public sealed class MainForm : Form
                 if (coverTask?.IsCompleted == true) latestCover = await coverTask;
                 if (latestCover != null) track = track with { ArtworkUrl = latestCover.ArtworkUrl, TrackUrl = latestCover.TrackUrl,
                     Album = string.IsNullOrWhiteSpace(track.Album) ? latestCover.Album : track.Album };
-                track = await telegramTimeline.EnrichAsync(track, latestCover?.Duration ?? 0);
             }
             var now = DateTimeOffset.UtcNow;
-            track = playbackClock.Update(track, now);
+            track = track != null && ApproximatePlaybackClock.Supports(track)
+                ? telegramClock.Apply(track, now, latestCover?.Duration ?? 0) : playbackClock.Update(track, now);
             if (!rpc.Connected)
             {
                 if (now < retryAfter) return;
@@ -174,7 +175,8 @@ public sealed class MainForm : Form
             status.Text = paused ? "Передача приостановлена. Статус скрыт." : track == null
                 ? "Discord подключён. Жду музыку; на паузе статус скрывается."
                 : $"В Discord: {track.Artist} — {track.Title} ({Presence.DisplaySource(track)})\n"
-                    + (track.Updated <= DateTimeOffset.UnixEpoch ? "Позиция недоступна: открой окно AyuGram для чтения плеера."
+                    + (track.Updated <= DateTimeOffset.UnixEpoch ? (ApproximatePlaybackClock.Supports(track)
+                        ? "Длительность неизвестна — таймер скрыт." : "Позиция недоступна — таймер скрыт.")
                         : $"Позиция: {TimeSpan.FromSeconds(Presence.PositionAt(track, now)):mm\\:ss} · {track.TimingSource}")
                     + (track.ArtworkUrl != null ? " · обложка найдена"
                         : coverTask?.IsCompleted == false ? " · поиск обложки…"

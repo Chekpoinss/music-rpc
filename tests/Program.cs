@@ -4,56 +4,6 @@ using System.Text;
 using System.Text.Json;
 using MusicRpc;
 
-if (args.Contains("--trace-timeline") || args.Contains("--trace-live"))
-{
-    var reader = new MediaReader();
-    var timeline = new TelegramTimeline();
-    var clock = new PlaybackClock();
-    using var traceRpc = new DiscordRpc();
-    var live = args.Contains("--trace-live");
-    if (live) await traceRpc.ConnectAsync(Settings.Load().ApplicationId);
-    var writes = 0;
-    var publisher = new PlaybackPublisher(async activity =>
-    {
-        writes++;
-        if (live)
-        {
-            await traceRpc.SetActivityAsync(activity);
-            Console.WriteLine("ACK " + traceRpc.LastResponse);
-        }
-    });
-    for (var i = 0; i < 12; i++)
-    {
-        var raw = (await reader.ReadAsync()).FirstOrDefault(t => t.Source == "AyuGram");
-        if (raw != null && !string.IsNullOrWhiteSpace(raw.Title))
-        {
-            var enriched = await timeline.EnrichAsync(raw, 0);
-            enriched = clock.Update(enriched, DateTimeOffset.UtcNow)!;
-            await publisher.UpdateAsync(enriched, DateTimeOffset.UtcNow);
-            Console.WriteLine(JsonSerializer.Serialize(new { time = DateTimeOffset.UtcNow,
-                raw.Title, raw.Playing, source = enriched.TimingSource, position = enriched.Position,
-                duration = enriched.Duration, updated = enriched.Updated, writes }));
-        }
-        await Task.Delay(1000);
-    }
-    return;
-}
-
-if (args.Contains("--live"))
-{
-    var liveTrack = (await new MediaReader().ReadAsync()).First(t => t.Playing && t.Source != "Другое");
-    var match = await new Catalog().FindAsync(liveTrack);
-    liveTrack = await new TelegramTimeline().EnrichAsync(liveTrack, match?.Duration ?? 0);
-    if (match != null) liveTrack = liveTrack with { ArtworkUrl = match.ArtworkUrl, TrackUrl = match.TrackUrl, Album = match.Album };
-    using var liveRpc = new DiscordRpc();
-    await liveRpc.ConnectAsync(Settings.Load().ApplicationId);
-    await liveRpc.SetActivityAsync(Presence.Build(liveTrack, DateTimeOffset.UtcNow));
-    Console.WriteLine(JsonSerializer.Serialize(liveRpc.LastResponse, new JsonSerializerOptions { WriteIndented = true }));
-    await Task.Delay(5000);
-    await liveRpc.SetActivityAsync(null);
-    return;
-}
-
 int passed = 0;
 void Check(bool condition, string message)
 {
@@ -93,8 +43,6 @@ Check(Presence.Build(apple, now)["name"].ToString() == "Apple Music", "Apple Mus
 var artworkPresence = JsonSerializer.SerializeToElement(Presence.Build(ayu with { ArtworkUrl = "https://example.com/cover.jpg", TrackUrl = "https://music.apple.com/us/song/1" }, now));
 Check(artworkPresence.GetProperty("assets").GetProperty("large_image").GetString() == "https://example.com/cover.jpg", "external artwork URL sent to Discord");
 Check(artworkPresence.GetProperty("buttons")[0].GetProperty("url").GetString() == "https://music.apple.com/us/song/1", "matched track link sent to Discord");
-Check(TelegramTimeline.ParseTime("01:05") == 65 && TelegramTimeline.ParseTime("1:02:03") == 3723, "Telegram elapsed time label parsed");
-Check(TelegramTimeline.ParseTime("65%") == null && TelegramTimeline.ParseTime("12:99") == null, "invalid labels rejected");
 using var catalogFixture = JsonDocument.Parse("""
 {"results":[
 {"trackName":"Трек", "artistName":"Другой", "artworkUrl100":"https://a.mzstatic.com/100x100bb.jpg", "trackViewUrl":"https://music.apple.com/us/song/1"},

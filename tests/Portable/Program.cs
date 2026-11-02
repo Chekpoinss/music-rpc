@@ -104,6 +104,45 @@ for (var i = 0; i < 25; i++)
     await stablePublisher.UpdateAsync(track with { Position = 65 + i, Updated = now.AddSeconds(i) }, now.AddSeconds(i));
 Check(ordinary.Count == 1, "25 seconds of normal playback need only one activity command");
 
+// Telegram Windows: count playing time, independently of stale/missing positions or window state.
+var approximate = new ApproximatePlaybackClock();
+var tg = track with { Position = 90, Duration = 100, Updated = DateTimeOffset.MinValue };
+approximate.Observe([tg], now);
+Check(approximate.Apply(tg, now).Position == 0, "approximate Telegram timer starts at discovery, ignores incoming position");
+approximate.Observe([tg with { Position = 2 }], now.AddSeconds(12));
+Check(approximate.Apply(tg, now.AddSeconds(12)).Position == 12, "closed window and incoming seek do not reset approximate clock");
+var pausedTg = tg with { Playing = false };
+approximate.Observe([pausedTg], now.AddSeconds(20));
+approximate.Observe([pausedTg], now.AddSeconds(70));
+Check(approximate.Apply(pausedTg, now.AddSeconds(70)).Position == 20, "approximate clock freezes during pause");
+approximate.Observe([tg], now.AddSeconds(80));
+Check(approximate.Apply(tg, now.AddSeconds(90)).Position == 30, "resume adds only playing time, excludes pause");
+approximate.Observe([tg], now.AddSeconds(165));
+Check(approximate.Apply(tg, now.AddSeconds(165)).Position == 5, "known duration wraps for a looped track");
+Check(approximate.Apply(tg, now.AddSeconds(365)).Position == 5, "multiple repeats wrap without cumulative timer drift");
+var newTg = tg with { Title = "Новая песня" };
+approximate.Observe([newTg], now.AddSeconds(400));
+Check(approximate.Apply(newTg, now.AddSeconds(400)).Position == 0, "changing song resets approximate timer to zero");
+approximate.Observe([], now.AddSeconds(405));
+approximate.Observe([newTg], now.AddSeconds(410));
+Check(approximate.Apply(newTg, now.AddSeconds(410)).Position == 0, "closing and reopening player starts a fresh clock");
+var unknown = tg with { AppId = "unknown", Duration = 0 };
+approximate.Observe([unknown], now.AddSeconds(500));
+var hiddenTimer = approximate.Apply(unknown, now.AddSeconds(510));
+Check(!Presence.Build(hiddenTimer, now.AddSeconds(510)).ContainsKey("timestamps"), "unknown duration hides Telegram timer");
+var durationArrived = approximate.Apply(unknown, now.AddSeconds(515), catalogDuration: 100);
+Check(durationArrived.Position == 15 && durationArrived.Duration == 100, "late catalog duration preserves elapsed time from discovery");
+Check(approximate.Apply(unknown, now.AddSeconds(516)).Duration == 100, "catalog duration survives later missing metadata");
+Check(approximate.Apply(track with { Source = "Apple Music" }, now).Source == "Apple Music", "approximate mode does not alter Apple Music");
+var loopWrites = new List<Dictionary<string, object>?>();
+var loopPublisher = new PlaybackPublisher(x => { loopWrites.Add(x); return Task.CompletedTask; });
+var loopClock = new ApproximatePlaybackClock();
+loopClock.Observe([tg], now);
+await loopPublisher.UpdateAsync(loopClock.Apply(tg, now.AddSeconds(98)), now.AddSeconds(98));
+await loopPublisher.UpdateAsync(loopClock.Apply(tg, now.AddSeconds(105)), now.AddSeconds(105));
+var loopPayload = JsonSerializer.SerializeToElement(loopWrites[^1]);
+Check(loopWrites.Count == 2 && loopPayload.GetProperty("timestamps").GetProperty("start").GetInt64() == now.AddSeconds(100).ToUnixTimeSeconds(), "loop publishes a fresh Discord timer for the next cycle");
+
 if (OperatingSystem.IsLinux())
 {
     var originalRuntime = Environment.GetEnvironmentVariable("XDG_RUNTIME_DIR");
