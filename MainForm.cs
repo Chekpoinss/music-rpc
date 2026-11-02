@@ -176,7 +176,9 @@ public sealed class MainForm : Form
                 : $"В Discord: {track.Artist} — {track.Title} ({Presence.DisplaySource(track)})\n"
                     + (track.Updated <= DateTimeOffset.UnixEpoch ? "Позиция недоступна: открой окно AyuGram для чтения плеера."
                         : $"Позиция: {TimeSpan.FromSeconds(Presence.PositionAt(track, now)):mm\\:ss} · {track.TimingSource}")
-                    + (track.ArtworkUrl == null ? " · обложка не найдена" : " · обложка найдена");
+                    + (track.ArtworkUrl != null ? " · обложка найдена"
+                        : coverTask?.IsCompleted == false ? " · поиск обложки…"
+                        : catalog.LastError != null ? " · " + catalog.LastError : " · обложка не найдена в каталогах");
         }
         catch (Exception ex)
         {

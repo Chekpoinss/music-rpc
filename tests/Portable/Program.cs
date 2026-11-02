@@ -28,6 +28,31 @@ Check(built.GetProperty("name").GetString() == "Telegram", "source name sent ins
 Check(built.GetProperty("timestamps").GetProperty("end").GetInt64() - now.ToUnixTimeSeconds() == 102, "MPRIS position reflected in Discord timer");
 Check(DiscordRpc.UnixSocketPaths().Any(p => p.Contains("app/com.discordapp.Discord")), "Flatpak socket candidate");
 
+var lookupTime = now;
+using var catalogHandler = new CatalogHandler();
+using var catalogHttp = new HttpClient(catalogHandler);
+var covers = new Catalog(catalogHttp, () => lookupTime);
+Check(await covers.FindAsync(track) == null && covers.LastError != null, "offline catalog is reported as unavailable, not a missing song");
+var callsBeforeRetry = catalogHandler.Requests;
+lookupTime = now.AddSeconds(5);
+await covers.FindAsync(track);
+Check(catalogHandler.Requests == callsBeforeRetry, "offline retry backoff prevents request spam");
+catalogHandler.Offline = false;
+lookupTime = now.AddSeconds(16);
+var recovered = await covers.FindAsync(track);
+Check(recovered != null && covers.LastError == null, "cover recovers after 15 seconds when network returns");
+catalogHandler.Offline = true;
+lookupTime = now.AddHours(3);
+Check(await covers.FindAsync(track) == recovered, "known cover survives a later network failure");
+
+var artworkUpdates = new List<Dictionary<string, object>?>();
+var artworkPublisher = new PlaybackPublisher(x => { artworkUpdates.Add(x); return Task.CompletedTask; });
+await artworkPublisher.UpdateAsync(track, now);
+await artworkPublisher.UpdateAsync(track with { ArtworkUrl = recovered!.ArtworkUrl, TrackUrl = recovered.TrackUrl }, now.AddSeconds(6));
+Check(artworkUpdates.Count == 2 && artworkUpdates[^1]!.ContainsKey("assets"), "late artwork arrival is republished without touching the playback clock");
+var artTiming = JsonSerializer.SerializeToElement(artworkUpdates[^1]);
+Check(artTiming.GetProperty("timestamps").GetProperty("start").GetInt64() == now.AddSeconds(-65).ToUnixTimeSeconds(), "cover arrival preserves original timer anchor");
+
 var sent = new List<Dictionary<string, object>?>();
 var publisher = new PlaybackPublisher(activity => { sent.Add(activity); return Task.CompletedTask; });
 await publisher.UpdateAsync(track, now);

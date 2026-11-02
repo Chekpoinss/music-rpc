@@ -12,10 +12,13 @@ public sealed class Catalog
     private readonly Dictionary<string, (CatalogMatch? Match, DateTimeOffset Expires)> cache = new();
     private DateTimeOffset nextRequest;
     private DateTimeOffset appleRetry;
+    private readonly Func<DateTimeOffset> clock;
+    public string? LastError { get; private set; }
 
-    public Catalog(HttpClient? http = null)
+    public Catalog(HttpClient? http = null, Func<DateTimeOffset>? clock = null)
     {
         this.http = http ?? new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
+        this.clock = clock ?? (() => DateTimeOffset.UtcNow);
     }
 
     public static string Normalize(string text) => string.Concat(text.ToLowerInvariant().EnumerateRunes()
@@ -51,11 +54,12 @@ public sealed class Catalog
     {
         if (string.IsNullOrWhiteSpace(track.Artist)) return null;
         var key = track.Artist + "\n" + track.Title + "\n" + track.Album;
-        var now = DateTimeOffset.UtcNow;
+        var now = clock();
         if (cache.TryGetValue(key, out var entry) && entry.Expires > now) return entry.Match;
         if (now < nextRequest) return null;
         nextRequest = now.AddSeconds(4);
         CatalogMatch? match = null;
+        var networkFailed = false;
         if (now >= appleRetry) try
         {
             var term = Uri.EscapeDataString(track.Artist + " " + track.Title);
@@ -79,10 +83,14 @@ public sealed class Catalog
         }
         catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or JsonException)
         {
+            networkFailed = true;
             AppLog.Write("Каталог Deezer недоступен: " + ex.Message);
         }
+        LastError = match == null && networkFailed ? "Каталоги обложек недоступны — повторим поиск" : null;
+        if (match == null && networkFailed && entry.Match != null) return entry.Match;
         if (cache.Count >= 250) cache.Clear();
-        cache[key] = (match, now.AddMinutes(match == null ? 2 : 120));
+        cache[key] = (match, match != null ? now.AddHours(2)
+            : networkFailed ? now.AddSeconds(15) : now.AddMinutes(2));
         return match;
     }
 
