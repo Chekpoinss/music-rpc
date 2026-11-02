@@ -33,20 +33,51 @@ var publisher = new PlaybackPublisher(activity => { sent.Add(activity); return T
 await publisher.UpdateAsync(track, now);
 await publisher.UpdateAsync(track with { Position = 67, Updated = now.AddSeconds(2) }, now.AddSeconds(2));
 Check(sent.Count == 1, "normal progress keeps a stable timer");
-var nextSong = track with { Title = "Другой трек", Position = 19, Duration = 217, Updated = now.AddSeconds(4) };
-await publisher.UpdateAsync(nextSong, now.AddSeconds(4));
+var nextSong = track with { Title = "Другой трек", Position = 19, Duration = 217, Updated = now.AddSeconds(6) };
+await publisher.UpdateAsync(nextSong, now.AddSeconds(6));
 var nextPayload = JsonSerializer.SerializeToElement(sent[^1]);
-Check(sent.Count == 3 && sent[^2] == null, "track change clears previous activity before setting new timer");
-Check(nextPayload.GetProperty("timestamps").GetProperty("start").GetInt64() == now.AddSeconds(4 - 19).ToUnixTimeSeconds(), "new song starts at actual 19 seconds, not previous song time");
-await publisher.UpdateAsync(nextSong with { Position = 3, Updated = now.AddSeconds(6) }, now.AddSeconds(6));
-Check(sent.Count == 5 && sent[^2] == null, "backward seek resets rendered Discord timer");
-await publisher.UpdateAsync(nextSong with { Playing = false }, now.AddSeconds(8));
+Check(sent.Count == 2 && sent.All(x => x != null), "track change is one atomic replacement, no clear/set burst");
+Check(nextPayload.GetProperty("timestamps").GetProperty("start").GetInt64() == now.AddSeconds(6 - 19).ToUnixTimeSeconds(), "new song starts at actual 19 seconds");
+await publisher.UpdateAsync(nextSong with { Position = 3, Updated = now.AddSeconds(12) }, now.AddSeconds(12));
+Check(sent.Count == 3 && sent[^1] != null, "backward seek updates timer without clearing activity");
+await publisher.UpdateAsync(nextSong with { Playing = false }, now.AddSeconds(13));
 Check(sent[^1] == null, "pause clears activity immediately");
-await publisher.UpdateAsync(nextSong with { Position = 3, Updated = now.AddSeconds(20) }, now.AddSeconds(20));
+await publisher.UpdateAsync(nextSong with { Position = 3, Updated = now.AddSeconds(25) }, now.AddSeconds(25));
 var resumed = JsonSerializer.SerializeToElement(sent[^1]);
-Check(resumed.GetProperty("timestamps").GetProperty("start").GetInt64() == now.AddSeconds(17).ToUnixTimeSeconds(), "resume does not include paused wall time");
-await publisher.UpdateAsync(nextSong with { Updated = DateTimeOffset.MinValue }, now.AddSeconds(22));
-Check(sent[^2] == null && !sent[^1]!.ContainsKey("timestamps"), "lost timeline clears stale timestamps instead of leaving old timer");
+Check(resumed.GetProperty("timestamps").GetProperty("start").GetInt64() == now.AddSeconds(22).ToUnixTimeSeconds(), "resume does not include paused wall time");
+await publisher.UpdateAsync(nextSong with { Updated = DateTimeOffset.MinValue }, now.AddSeconds(31));
+Check(sent[^1] != null && !sent[^1]!.ContainsKey("timestamps"), "lost timeline replaces stale timestamps atomically");
+
+var clock = new PlaybackClock();
+var anchor = clock.Update(track with { Position = 9 }, now)!;
+var repeated = clock.Update(track with { Position = 9, Updated = now.AddSeconds(1) }, now.AddSeconds(1))!;
+Check(Presence.PositionAt(repeated, now.AddSeconds(1)) == 10, "repeated rounded UI label does not slow timer");
+var unavailable = clock.Update(track with { Updated = DateTimeOffset.MinValue, Duration = 0 }, now.AddSeconds(4))!;
+Check(Presence.PositionAt(unavailable, now.AddSeconds(4)) == 13 && unavailable.Duration == 167, "brief unavailable UI keeps advancing the same clock");
+var forward = clock.Update(track with { Position = 95, Updated = now.AddSeconds(5) }, now.AddSeconds(5))!;
+Check(Presence.PositionAt(forward, now.AddSeconds(5)) == 95, "forward seek reanchors measured position");
+var backward = clock.Update(track with { Position = 2, Updated = now.AddSeconds(7) }, now.AddSeconds(7))!;
+Check(Presence.PositionAt(backward, now.AddSeconds(7)) == 2, "backward seek reanchors measured position");
+clock.Update(null, now.AddSeconds(8));
+var afterPause = clock.Update(track with { Position = 2, Updated = now.AddSeconds(18) }, now.AddSeconds(18))!;
+Check(Presence.PositionAt(afterPause, now.AddSeconds(18)) == 2, "clock pauses instead of accumulating wall time");
+var other = clock.Update(nextSong with { Position = 0, Updated = now.AddSeconds(19) }, now.AddSeconds(19))!;
+Check(Presence.PositionAt(other, now.AddSeconds(19)) == 0, "track change cannot inherit old clock");
+
+var burst = new List<DateTimeOffset>();
+DateTimeOffset tickTime = now;
+var throttled = new PlaybackPublisher(activity => { burst.Add(tickTime); return Task.CompletedTask; });
+for (var i = 0; i < 40; i++)
+{
+    tickTime = now.AddSeconds(i);
+    await throttled.UpdateAsync(track with { Position = i * 5, Updated = tickTime }, tickTime);
+}
+Check(burst.Count <= 8 && burst.All(t => burst.Count(x => x >= t && x < t.AddSeconds(20)) <= 5), "seek spam stays within five commands per twenty seconds");
+var ordinary = new List<Dictionary<string, object>?>();
+var stablePublisher = new PlaybackPublisher(x => { ordinary.Add(x); return Task.CompletedTask; });
+for (var i = 0; i < 25; i++)
+    await stablePublisher.UpdateAsync(track with { Position = 65 + i, Updated = now.AddSeconds(i) }, now.AddSeconds(i));
+Check(ordinary.Count == 1, "25 seconds of normal playback need only one activity command");
 
 if (OperatingSystem.IsLinux())
 {

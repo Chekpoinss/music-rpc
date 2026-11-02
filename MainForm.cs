@@ -16,6 +16,7 @@ public sealed class MainForm : Form
     private DateTimeOffset coverAttempt;
     private readonly DiscordRpc rpc = new();
     private readonly PlaybackPublisher publisher;
+    private readonly PlaybackClock playbackClock = new();
     private readonly TextBox applicationId = new() { Dock = DockStyle.Fill, PlaceholderText = "Application ID из Discord Developer Portal" };
     private readonly CheckBox telegram = new() { Text = "AyuGram / Telegram", AutoSize = true };
     private readonly CheckBox apple = new() { Text = "Apple Music для Windows", AutoSize = true };
@@ -160,6 +161,7 @@ public sealed class MainForm : Form
                 track = await telegramTimeline.EnrichAsync(track, latestCover?.Duration ?? 0);
             }
             var now = DateTimeOffset.UtcNow;
+            track = playbackClock.Update(track, now);
             if (!rpc.Connected)
             {
                 if (now < retryAfter) return;

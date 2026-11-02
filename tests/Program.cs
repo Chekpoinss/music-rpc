@@ -4,6 +4,41 @@ using System.Text;
 using System.Text.Json;
 using MusicRpc;
 
+if (args.Contains("--trace-timeline") || args.Contains("--trace-live"))
+{
+    var reader = new MediaReader();
+    var timeline = new TelegramTimeline();
+    var clock = new PlaybackClock();
+    using var traceRpc = new DiscordRpc();
+    var live = args.Contains("--trace-live");
+    if (live) await traceRpc.ConnectAsync(Settings.Load().ApplicationId);
+    var writes = 0;
+    var publisher = new PlaybackPublisher(async activity =>
+    {
+        writes++;
+        if (live)
+        {
+            await traceRpc.SetActivityAsync(activity);
+            Console.WriteLine("ACK " + traceRpc.LastResponse);
+        }
+    });
+    for (var i = 0; i < 12; i++)
+    {
+        var raw = (await reader.ReadAsync()).FirstOrDefault(t => t.Source == "AyuGram");
+        if (raw != null && !string.IsNullOrWhiteSpace(raw.Title))
+        {
+            var enriched = await timeline.EnrichAsync(raw, 0);
+            enriched = clock.Update(enriched, DateTimeOffset.UtcNow)!;
+            await publisher.UpdateAsync(enriched, DateTimeOffset.UtcNow);
+            Console.WriteLine(JsonSerializer.Serialize(new { time = DateTimeOffset.UtcNow,
+                raw.Title, raw.Playing, source = enriched.TimingSource, position = enriched.Position,
+                duration = enriched.Duration, updated = enriched.Updated, writes }));
+        }
+        await Task.Delay(1000);
+    }
+    return;
+}
+
 if (args.Contains("--live"))
 {
     var liveTrack = (await new MediaReader().ReadAsync()).First(t => t.Playing && t.Source != "Другое");

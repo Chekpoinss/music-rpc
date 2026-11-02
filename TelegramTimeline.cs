@@ -65,22 +65,6 @@ public sealed class TelegramTimeline
                 var position = names.Select(ParseTime).FirstOrDefault(x => x.HasValue);
                 if (position == null) continue;
                 double duration = catalogDuration;
-                if (duration <= 0)
-                {
-                    var slider = nodes.FirstOrDefault(n => n.Current.ControlType == ControlType.Slider);
-                    if (slider != null && slider.TryGetCurrentPattern(RangeValuePattern.Pattern, out var raw))
-                    {
-                        var range = ((RangeValuePattern)raw).Current;
-                        var fraction = (range.Value - range.Minimum) / (range.Maximum - range.Minimum);
-                        if (fraction > .02 && fraction <= 1) duration = Math.Round(position.Value / fraction);
-                    }
-                    if (duration <= 0 && slider != null && slider.TryGetCurrentPattern(ValuePattern.Pattern, out var value))
-                    {
-                        var percent = ((ValuePattern)value).Current.Value.Trim().TrimEnd('%');
-                        if (double.TryParse(percent, NumberStyles.Float, CultureInfo.InvariantCulture, out var p) && p > 2 && p <= 100)
-                            duration = Math.Round(position.Value * 100 / p);
-                    }
-                }
                 var speed = nodes.Select(n => n.Current.Name).Select(n => Regex.Match(n, @"(?:speed|скорость).*?(\d+(?:[.,]\d+)?)\s*[xх×]", RegexOptions.IgnoreCase))
                     .FirstOrDefault(m => m.Success);
                 double rate = speed != null && double.TryParse(speed.Groups[1].Value.Replace(',', '.'), CultureInfo.InvariantCulture, out var parsed) ? parsed : 1;

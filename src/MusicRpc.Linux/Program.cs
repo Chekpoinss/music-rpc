@@ -56,6 +56,7 @@ try
     Console.CancelKeyPress += (_, e) => { e.Cancel = true; stop.Cancel(); };
     using var rpc = new DiscordRpc();
     var publisher = new PlaybackPublisher(rpc.SetActivityAsync);
+    var playbackClock = new PlaybackClock();
     var selector = new TrackSelector();
     var catalog = new Catalog();
     Task<CatalogMatch?>? coverTask = null;
@@ -83,6 +84,7 @@ try
                             Album = string.IsNullOrWhiteSpace(track.Album) ? match.Album : track.Album };
                 }
                 var now = DateTimeOffset.UtcNow;
+                track = playbackClock.Update(track, now);
                 if (!rpc.Connected && now >= retryAfter)
                 {
                     await rpc.ConnectAsync(settings.ApplicationId);
