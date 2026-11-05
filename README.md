@@ -1,5 +1,9 @@
 # Music RPC
 
+**Твоя музыка — в профиле Discord. Windows и Linux, без токенов аккаунта.**
+
+[Скачать последнюю версию](https://github.com/Chekpoinss/music-rpc/releases/latest) · [Сообщить об ошибке](https://github.com/Chekpoinss/music-rpc/issues)
+
 Discord Rich Presence для **AyuGram / Telegram** и **Apple Music**: название трека, исполнитель, обложка и время воспроизведения.
 
 ## Платформы
@@ -7,7 +11,7 @@ Discord Rich Presence для **AyuGram / Telegram** и **Apple Music**: назв
 | Платформа | Источник | Интерфейс | Статус |
 | --- | --- | --- | --- |
 | Windows 10 2004+ / Windows 11 x64 | Системные медиасессии Windows; приблизительный таймер Telegram | Окно настроек и трей | Проверено с AyuGram и настольным Discord |
-| Linux x64 | MPRIS через playerctl; Discord Unix IPC | Консоль | Экспериментально; автоматические тесты MPRIS и IPC, нужен тест с реальными плеерами |
+| Linux x64 | MPRIS через playerctl; Discord Unix IPC | GTK 4 и консоль | Автоматические тесты MPRIS и IPC; совместимость зависит от плеера и окружения |
 
 Apple Music на Windows читается из настольного приложения. На Linux поддерживается MPRIS-совместимый сторонний клиент, например Cider; отдельного нативного клиента Apple Music для Linux проект не предоставляет. Совместимость зависит от версии клиента и его медиаданных.
 
@@ -21,7 +25,7 @@ Apple Music на Windows читается из настольного прило
 
 ## Windows
 
-Скачай Windows-артефакт из успешного запуска [GitHub Actions](https://github.com/Chekpoinss/music-rpc/actions), распакуй и открой `MusicRpc.exe`. Он автономный: отдельно устанавливать Python или .NET не нужно.
+Скачай `music-rpc-windows-x64.zip` из [последнего релиза](https://github.com/Chekpoinss/music-rpc/releases/latest), распакуй и открой `MusicRpc.exe`. Он автономный: отдельно устанавливать Python или .NET не нужно.
 
 Вставь Application ID и нажми **Сохранить и подключить**. Можно выбрать источники и приоритет, если они играют одновременно. Крестик сворачивает окно в трей; двойной щелчок по значку открывает настройки. Полное завершение: меню значка → **Выход**.
 
@@ -33,24 +37,38 @@ Apple Music на Windows читается из настольного прило
 
 Apple Music в Windows и Linux-клиент используют доступную системную позицию.
 
-## Linux (экспериментально)
+## Linux
 
-Нужны `playerctl`, пользовательская сессия D-Bus, MPRIS-совместимый плеер и настольный Discord. Например, на Debian/Ubuntu:
+Скачай `music-rpc-linux-x64.tar.gz` из [последнего релиза](https://github.com/Chekpoinss/music-rpc/releases/latest). В архиве — автономный .NET-бинарник, GTK-интерфейс и установщик без `sudo`.
+
+Нужны Linux x86_64 с glibc, Python 3, GTK 4, PyGObject и `playerctl`. Плеер и настольный Discord должны работать в той же пользовательской сессии D-Bus.
 
 ```sh
-sudo apt install playerctl
+# Fedora
+sudo dnf install playerctl python3-gobject gtk4
+# Debian / Ubuntu
+sudo apt install playerctl python3-gi gir1.2-gtk-4.0
+# Arch Linux
+sudo pacman -S playerctl python-gobject gtk4
 ```
 
-Скачай Linux-артефакт из [GitHub Actions](https://github.com/Chekpoinss/music-rpc/actions), распакуй и выполни:
+Распакуй архив и установи:
 
 ```sh
-chmod +x music-rpc
+tar -xzf music-rpc-linux-x64.tar.gz
+cd music-rpc-linux-x64
+sh install.sh
+~/.local/bin/music-rpc-gui
+```
+
+Дальше открывай **Music RPC** через меню приложений. Вставь Application ID, выбери источники, приоритет и нажми **Сохранить и подключить**. В окне доступны остановка, журнал, выбор Apple Music MPRIS-плеера и отключение поиска обложек. Закрытие окна останавливает передачу статуса; трея в Linux пока нет.
+
+Для запуска без окна с сохранёнными в GUI настройками: `~/.local/bin/music-rpc-background`. Журнал фонового запуска — `~/.config/music-rpc/background.log` (или каталог внутри `$XDG_CONFIG_HOME`). Автозапуск установщик не включает. GUI и фоновый процесс следует запускать по отдельности: одновременно работает один экземпляр CLI.
+
+Можно использовать консоль без установки GUI:
+
+```sh
 ./music-rpc --application-id YOUR_APPLICATION_ID
-```
-
-ID сохраняется, в следующие разы достаточно `./music-rpc`. Для завершения — Ctrl+C. GUI и автоматическая установка автозапуска для Linux пока отсутствуют.
-
-```sh
 ./music-rpc --help
 ./music-rpc --diagnose
 ./music-rpc --priority telegram
@@ -59,6 +77,8 @@ ID сохраняется, в следующие разы достаточно `
 playerctl --list-all
 ./music-rpc --apple-player EXACT_MPRIS_PLAYER_NAME
 ```
+
+ID сохраняется. В следующий раз достаточно `./music-rpc`; завершение — Ctrl+C. Остальные параметры CLI действуют для текущего запуска. Для удаления установленной программы останови её и выполни `sh uninstall.sh` из распакованного архива; настройки останутся.
 
 AyuGram, Telegram и Cider распознаются по имени MPRIS-плеера. Браузеры по умолчанию игнорируются. `--apple-player` позволяет явно выбрать конкретную MPRIS-сессию стороннего клиента или браузера; убедись, что это нужный источник. При выборе общей браузерной сессии её следующие вкладки могут тоже отображаться как Apple Music.
 
@@ -102,13 +122,13 @@ sh build-linux.sh
 dotnet run --project tests/Portable/MusicRpc.Portable.Tests.csproj -c Release
 ```
 
-Сборки: `dist/MusicRpc.exe` и `dist/linux/music-rpc`. GitHub Actions проверяет Windows и Ubuntu, включая обмен Discord IPC через тестовые серверы и настоящий playerctl против временного MPRIS-плеера. Успешные запуски сохраняют артефакты обеих платформ. Это не заменяет ручную проверку конкретных версий AyuGram, Apple Music/Cider и Discord.
+Сборки: `dist/MusicRpc.exe` и `dist/linux/` (CLI, GUI и установщик). GitHub Actions проверяет Windows и Ubuntu, включая обмен Discord IPC через тестовые серверы и настоящий playerctl против временного MPRIS-плеера. Успешные запуски сохраняют артефакты обеих платформ. Это не заменяет ручную проверку конкретных версий AyuGram, Apple Music/Cider и Discord.
 
 ## Структура и участие
 
 - `src/MusicRpc.Core` — общая логика, `IMediaReader`, MPRIS и Discord IPC. Общие исходники `Media.cs`, `Settings.cs`, `Catalog.cs`, `DiscordRpc.cs` пока находятся в корне и подключаются в Core.
 - `MusicRpc.csproj`, `MainForm.cs`, `WindowsMediaReader.cs` — Windows GUI и системные API.
-- `src/MusicRpc.Linux` — Linux CLI.
+- `src/MusicRpc.Linux` — Linux CLI; `packaging/linux` — GTK 4 GUI и установка.
 - `tests` — Windows и переносимые проверки; `.github/workflows` — CI.
 
 [Как внести вклад](CONTRIBUTING.md) · [Планы](docs/ROADMAP.md) · [Лицензия MIT](LICENSE)

@@ -1,0 +1,202 @@
+#!/usr/bin/python3
+"""GTK 4 frontend for the existing Music RPC Linux executable."""
+import codecs
+import json
+import os
+from pathlib import Path
+import shutil
+import signal
+import subprocess
+import time
+
+import gi
+gi.require_version("Gtk", "4.0")
+from gi.repository import Gio, GLib, Gtk
+
+
+CONFIG = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "music-rpc"
+PRIORITIES = ["Автоматически", "Telegram / AyuGram", "Apple Music"]
+
+
+class MusicRpc(Gtk.Application):
+    def __init__(self):
+        super().__init__(application_id="io.github.chekpoinss.MusicRpc")
+        self.window = None
+        self.process = None
+        self.stopping = False
+        self.closing = False
+        self.settings = {}
+
+    def do_activate(self):
+        if self.window:
+            self.window.present()
+            return
+        self.window = Gtk.ApplicationWindow(application=self, title="Music RPC")
+        self.window.set_default_size(620, 660)
+        self.window.connect("close-request", self.close_requested)
+        header = Gtk.HeaderBar()
+        self.window.set_titlebar(header)
+        root = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=14)
+        for side in ("top", "bottom", "start", "end"):
+            getattr(root, "set_margin_" + side)(24)
+        scroll = Gtk.ScrolledWindow(hscrollbar_policy=Gtk.PolicyType.NEVER)
+        scroll.set_child(root)
+        self.window.set_child(scroll)
+        title = Gtk.Label(label="Музыка в твоём Discord", xalign=0)
+        title.add_css_class("title-1")
+        root.append(title)
+        root.append(Gtk.Label(label="AyuGram / Telegram и Apple Music через MPRIS", xalign=0, wrap=True))
+        root.append(Gtk.LinkButton(uri="https://discord.com/developers/applications",
+                                   label="Создать приложение в Discord Developer Portal"))
+        root.append(Gtk.Label(label="General Information → Application ID", xalign=0))
+        self.application_id = Gtk.Entry(placeholder_text="Application ID · 17–20 цифр")
+        root.append(self.application_id)
+        self.telegram = Gtk.CheckButton(label="AyuGram / Telegram")
+        self.apple = Gtk.CheckButton(label="Apple Music / Cider")
+        root.append(self.telegram)
+        root.append(self.apple)
+        root.append(Gtk.Label(label="Приоритет, если играют оба источника", xalign=0))
+        self.priority = Gtk.DropDown.new_from_strings(PRIORITIES)
+        root.append(self.priority)
+        self.apple_player = Gtk.Entry(placeholder_text="Имя MPRIS-плеера Apple Music (необязательно)")
+        self.apple_player.set_tooltip_text("Для Cider оставь пустым. Имя можно узнать командой playerctl --list-all.")
+        root.append(self.apple_player)
+        self.artwork = Gtk.CheckButton(label="Искать обложки по названию и исполнителю")
+        root.append(self.artwork)
+        root.append(Gtk.Label(label="При включённом поиске название и исполнитель отправляются в каталоги Apple / Deezer.",
+                              xalign=0, wrap=True))
+        buttons = Gtk.Box(spacing=10)
+        self.start = Gtk.Button(label="Сохранить и подключить")
+        self.start.add_css_class("suggested-action")
+        self.start.connect("clicked", self.start_clicked)
+        self.stop = Gtk.Button(label="Остановить")
+        self.stop.set_sensitive(False)
+        self.stop.connect("clicked", self.stop_clicked)
+        buttons.append(self.start)
+        buttons.append(self.stop)
+        root.append(buttons)
+        self.status = Gtk.Label(label="Вставь Application ID и нажми «Сохранить и подключить».", xalign=0, wrap=True)
+        self.status.set_selectable(True)
+        root.append(self.status)
+        self.log = Gtk.TextView(editable=False, cursor_visible=False, monospace=True,
+                                wrap_mode=Gtk.WrapMode.WORD_CHAR)
+        log_scroll = Gtk.ScrolledWindow(min_content_height=130, vexpand=True)
+        log_scroll.set_child(self.log)
+        root.append(log_scroll)
+        root.append(Gtk.Label(label="Закрытие окна останавливает передачу статуса.", xalign=0, wrap=True))
+        self.load_settings()
+        GLib.timeout_add(150, self.poll_process)
+        self.window.present()
+
+    def load_settings(self):
+        try:
+            self.settings = json.loads((CONFIG / "settings.json").read_text())
+            if not isinstance(self.settings, dict):
+                raise ValueError("Ожидался объект настроек")
+        except FileNotFoundError:
+            self.settings = {}
+        except (OSError, ValueError) as exc:
+            self.settings = {}
+            self.status.set_text(f"Не удалось прочитать настройки: {exc}")
+        s = self.settings
+        self.application_id.set_text(str(s.get("ApplicationId", "")))
+        self.telegram.set_active(bool(s.get("Telegram", True)))
+        self.apple.set_active(bool(s.get("AppleMusic", True)))
+        priority = s.get("Priority", PRIORITIES[0])
+        self.priority.set_selected(PRIORITIES.index(priority) if priority in PRIORITIES else 0)
+        self.apple_player.set_text(str(s.get("LinuxApplePlayer", "")))
+        self.artwork.set_active(bool(s.get("LinuxArtwork", True)))
+
+    def start_clicked(self, _button):
+        app_id = self.application_id.get_text().strip()
+        if not (17 <= len(app_id) <= 20 and app_id.isascii() and app_id.isdigit()):
+            self.status.set_text("Application ID должен содержать 17–20 цифр.")
+            return
+        installed = Path.home() / ".local/bin/music-rpc"
+        binary = str(installed) if installed.is_file() else shutil.which("music-rpc")
+        if not binary:
+            self.status.set_text("Не найден music-rpc. Установи Linux-бинарник в ~/.local/bin.")
+            return
+        if not shutil.which("playerctl"):
+            self.status.set_text("Нужен playerctl. Команды установки для твоего дистрибутива есть в README.")
+            return
+        try:
+            self.settings.update(ApplicationId=app_id, Telegram=self.telegram.get_active(),
+                                 AppleMusic=self.apple.get_active(),
+                                 Priority=PRIORITIES[self.priority.get_selected()],
+                                 LinuxApplePlayer=self.apple_player.get_text().strip(),
+                                 LinuxArtwork=self.artwork.get_active())
+            CONFIG.mkdir(parents=True, exist_ok=True)
+            temporary = CONFIG / "settings.gui.tmp"
+            temporary.write_text(json.dumps(self.settings, ensure_ascii=False, indent=2))
+            temporary.replace(CONFIG / "settings.json")
+            args = [binary]
+            if self.settings["LinuxApplePlayer"]:
+                args += ["--apple-player", self.settings["LinuxApplePlayer"]]
+            if not self.settings["LinuxArtwork"]:
+                args.append("--no-artwork")
+            self.process = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                            stdin=subprocess.DEVNULL, start_new_session=True)
+            os.set_blocking(self.process.stdout.fileno(), False)
+            self.decoder = codecs.getincrementaldecoder("utf-8")("replace")
+            self.stopping = False
+            self.log.get_buffer().set_text("")
+            self.start.set_sensitive(False)
+            self.stop.set_sensitive(True)
+            self.status.set_text("Подключение к Discord…")
+        except OSError as exc:
+            self.status.set_text(f"Не удалось запустить: {exc}")
+
+    def stop_clicked(self, _button=None):
+        if self.process and not self.stopping:
+            self.stopping = True
+            self.stop_deadline = time.monotonic() + 5
+            self.stop.set_sensitive(False)
+            self.status.set_text("Остановка…")
+            if self.process.poll() is None:
+                self.process.send_signal(signal.SIGINT)
+
+    def poll_process(self):
+        if not self.process:
+            return True
+        # Read a bounded amount per tick, keeping the UI responsive even on errors.
+        try:
+            chunk = os.read(self.process.stdout.fileno(), 65536)
+        except BlockingIOError:
+            chunk = b""
+        if chunk:
+            text = self.decoder.decode(chunk)
+            buffer = self.log.get_buffer()
+            buffer.insert(buffer.get_end_iter(), text)
+            if buffer.get_char_count() > 24000:
+                buffer.delete(buffer.get_start_iter(), buffer.get_iter_at_offset(buffer.get_char_count() - 16000))
+            lines = text.strip().splitlines()
+            if lines and not self.stopping:
+                self.status.set_text(lines[-1])
+        code = self.process.poll()
+        if code is not None and not chunk:
+            self.process.stdout.close()
+            self.process = None
+            self.start.set_sensitive(True)
+            self.stop.set_sensitive(False)
+            if self.stopping:
+                self.status.set_text("Передача остановлена.")
+            else:
+                self.status.set_text(f"Процесс завершился (код {code}). Подробности — в журнале ниже.")
+            if self.closing:
+                self.window.destroy()
+                return False
+        elif self.stopping and time.monotonic() >= self.stop_deadline:
+            self.process.kill()
+        return True
+
+    def close_requested(self, _window):
+        if self.process:
+            self.closing = True
+            self.stop_clicked()
+            return True
+        return False
+
+
+if __name__ == "__main__":
+    raise SystemExit(MusicRpc().run())

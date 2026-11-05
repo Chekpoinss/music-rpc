@@ -35,7 +35,9 @@ jobs:
         with:
           dotnet-version: '10.0.x'
       - run: dotnet run --project tests/Portable/MusicRpc.Portable.Tests.csproj -c Release
-      - run: dotnet publish src/MusicRpc.Linux/MusicRpc.Linux.csproj -c Release -r linux-x64 --self-contained true -p:PublishSingleFile=true -p:DebugType=None -o dist/linux
+      - run: sh build-linux.sh
+      - run: python3 -m py_compile packaging/linux/music-rpc-gui packaging/linux/music-rpc-background
+      - run: sh -n packaging/linux/install.sh && sh -n packaging/linux/uninstall.sh
       - run: |
           sudo apt-get update -qq
           sudo apt-get install -y playerctl python3-dbus python3-gi dbus-x11
@@ -43,6 +45,40 @@ jobs:
       - uses: actions/upload-artifact@v7
         with:
           name: music-rpc-linux-x64
-          path: |
-            dist/linux/music-rpc
-            README.md
+          path: dist/linux/
+
+  release:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [windows, linux]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    concurrency:
+      group: publish-release
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: music-rpc-linux-x64
+          path: release/music-rpc-linux-x64
+      - uses: actions/download-artifact@v8
+        with:
+          name: music-rpc-windows-x64
+          path: release/windows
+      - name: Package and publish version
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="$(cat VERSION)"
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          tag="v$version"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "Release $tag already exists"
+            exit 0
+          fi
+          chmod +x release/music-rpc-linux-x64/music-rpc* release/music-rpc-linux-x64/*.sh
+          tar -czf music-rpc-linux-x64.tar.gz -C release music-rpc-linux-x64
+          (cd release/windows && zip -r ../../music-rpc-windows-x64.zip .)
+          sha256sum music-rpc-linux-x64.tar.gz music-rpc-windows-x64.zip > SHA256SUMS
+          gh release create "$tag" --target "$GITHUB_SHA" --title "Music RPC $tag · Linux GUI" --notes-file CHANGELOG.md music-rpc-linux-x64.tar.gz music-rpc-windows-x64.zip SHA256SUMS

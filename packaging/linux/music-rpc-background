@@ -1,0 +1,22 @@
+#!/usr/bin/python3
+"""Run the CLI without a window, using the options saved by the GUI."""
+import json
+import os
+from pathlib import Path
+
+config = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "music-rpc"
+try:
+    settings = json.loads((config / "settings.json").read_text())
+except FileNotFoundError:
+    settings = {}
+binary = Path.home() / ".local/bin/music-rpc"
+args = [str(binary)]
+if settings.get("LinuxApplePlayer"):
+    args.extend(["--apple-player", settings["LinuxApplePlayer"]])
+if not settings.get("LinuxArtwork", True):
+    args.append("--no-artwork")
+config.mkdir(parents=True, exist_ok=True)
+with (config / "background.log").open("w") as log:
+    os.dup2(log.fileno(), 1)
+    os.dup2(log.fileno(), 2)
+os.execv(binary, args)
